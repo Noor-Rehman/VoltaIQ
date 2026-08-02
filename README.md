@@ -11,7 +11,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Live-success?style=for-the-badge)
 
-**[🌐 Live App](https://volta-iq-tau.vercel.app) · [📦 Repository](https://github.com/Noor-Rehman/voltaiq)**
+**[🌐 Live App](https://voltaiq.vercel.app/) · [📦 Repository](https://github.com/Noor-Rehman/voltaiq)**
 
 </div>
 
