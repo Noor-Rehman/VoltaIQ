@@ -178,36 +178,57 @@ def _fetch_weather_snapshot() -> dict:
         "max_radiation":     round(np.max(radiation),  2),
     }
 
+# ── Fallback weather (rough Islamabad seasonal averages, used only when
+#    Open-Meteo is unreachable AND we have no cache yet) ──────────────────
+def _seasonal_fallback_weather() -> dict:
+    now = datetime.now(timezone.utc)
+    month = now.month
+    is_summer = month in [5, 6, 7, 8, 9]
+
+    if is_summer:
+        return {
+            "month": month, "avg_temp": 32.0, "max_temp": 40.0, "min_temp": 24.0,
+            "avg_humidity": 45.0, "avg_apparent_temp": 34.0, "total_precip": 2.0,
+            "avg_wind": 10.0, "avg_radiation": 250.0, "max_radiation": 700.0,
+        }
+    else:
+        return {
+            "month": month, "avg_temp": 15.0, "max_temp": 22.0, "min_temp": 8.0,
+            "avg_humidity": 55.0, "avg_apparent_temp": 14.0, "total_precip": 1.0,
+            "avg_wind": 8.0, "avg_radiation": 130.0, "max_radiation": 450.0,
+        }
 
 def fetch_live_weather_and_predict() -> dict:
-    """
-    1. Return a cached prediction if it's still fresh (< CACHE_TTL_MINUTES old).
-    2. Otherwise fetch today's forecast from Open-Meteo, predict, and cache it.
-    3. If Open-Meteo fails (e.g. rate limited) but we have ANY cached result
-       (even a stale one), serve that instead of raising an error.
-    """
     now = datetime.now(timezone.utc)
 
-    # Serve fresh cache
     if _cache["result"] is not None and _cache["fetched_at"] is not None:
         age = now - _cache["fetched_at"]
         if age < timedelta(minutes=CACHE_TTL_MINUTES):
             return _cache["result"]
 
-    # Cache is stale or empty — try a fresh fetch
     try:
         weather_snapshot = _fetch_weather_snapshot()
         result = predict_from_weather(**weather_snapshot)
         result["weather_used"] = weather_snapshot
+        result["weather_source"] = "live"
 
         _cache["result"] = result
         _cache["fetched_at"] = now
         return result
 
     except Exception as e:
-        # Fetch failed — fall back to stale cache if we have ANY previous result
         if _cache["result"] is not None:
-            print(f"⚠️  Open-Meteo fetch failed ({e}), serving stale cached result")
+            print(f"Open-Meteo fetch failed ({e}), serving stale cached result")
             return _cache["result"]
-        # No cache at all to fall back on — surface the real error
-        raise RuntimeError(f"Could not fetch weather from Open-Meteo: {e}")
+
+        # No cache at all — use seasonal fallback so the app still works
+        print(f"Open-Meteo fetch failed ({e}), using seasonal fallback weather")
+        weather_snapshot = _seasonal_fallback_weather()
+        result = predict_from_weather(**weather_snapshot)
+        result["weather_used"] = weather_snapshot
+        result["weather_source"] = "fallback"
+
+        # Cache this too, with a short TTL so we retry live data sooner
+        _cache["result"] = result
+        _cache["fetched_at"] = now - timedelta(minutes=CACHE_TTL_MINUTES - 5)
+        return result
