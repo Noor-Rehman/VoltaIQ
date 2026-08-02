@@ -5,8 +5,8 @@ Loads the trained GBR model and runs predictions.
 Also fetches live weather from Open-Meteo for /predict/today.
 
 Two main functions used by routers:
-    predict_from_weather(weather_input) → tier + hours
-    fetch_live_weather_and_predict()    → auto-fetches + predicts
+    predict_from_weather(weather_input) -> tier + hours
+    fetch_live_weather_and_predict()    -> auto-fetches + predicts (cached)
 """
 
 import pickle
@@ -14,13 +14,13 @@ import requests
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-# ── Model paths ────────────────────────────────────────────────────────────────
+# ── Model paths ──────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).resolve().parent.parent   # VoltaIQ/
 MODEL_DIR  = BASE_DIR / "ml_model" / "trained_models"
 
-# ── Load model artifacts once at startup (not on every request) ───────────────
+# ── Load model artifacts once at startup (not on every request) ─────────
 def _load_artifacts():
     with open(MODEL_DIR / "outage_regressor.pkl",  "rb") as f:
         model = pickle.load(f)
@@ -38,10 +38,18 @@ except Exception as e:
     _MODEL, _FEATURE_COLS, _THRESHOLDS = None, None, None
 
 
-# ── Open-Meteo config (Islamabad coords) ──────────────────────────────────────
+# ── Open-Meteo config (Islamabad coords) ─────────────────────────────────
 ISLAMABAD_LAT  = 33.6169
 ISLAMABAD_LON  = 73.0933
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+# ── Cache config ──────────────────────────────────────────────────────────
+CACHE_TTL_MINUTES = 20  # only re-fetch weather at most every 20 minutes
+
+_cache = {
+    "result": None,       # last successful prediction dict
+    "fetched_at": None,   # datetime of when it was fetched
+}
 
 TIER_DESCRIPTIONS = {
     "2HR":  "Low shortfall — 2 hours of outage today",
@@ -94,7 +102,7 @@ def _build_feature_row(
     return pd.DataFrame([row])[_FEATURE_COLS]
 
 
-# ── Public functions ───────────────────────────────────────────────────────────
+# ── Public functions ──────────────────────────────────────────────────────
 
 def predict_from_weather(
     month: int,
@@ -132,14 +140,8 @@ def predict_from_weather(
     }
 
 
-def fetch_live_weather_and_predict() -> dict:
-    """
-    1. Fetch today's hourly forecast from Open-Meteo (free, no key).
-    2. Aggregate to daily averages.
-    3. Run prediction.
-    Returns full result including weather snapshot used.
-    """
-    # Fetch today's 24-hour forecast
+def _fetch_weather_snapshot() -> dict:
+    """Fetch today's 24-hour forecast from Open-Meteo and aggregate it."""
     params = {
         "latitude":   ISLAMABAD_LAT,
         "longitude":  ISLAMABAD_LON,
@@ -148,12 +150,9 @@ def fetch_live_weather_and_predict() -> dict:
         "timezone":   "Asia/Karachi",
     }
 
-    try:
-        resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        raise RuntimeError(f"Could not fetch weather from Open-Meteo: {e}")
+    resp = requests.get(OPEN_METEO_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
 
     hourly = data["hourly"]
     temps       = [t for t in hourly["temperature_2m"]          if t is not None]
@@ -166,7 +165,7 @@ def fetch_live_weather_and_predict() -> dict:
     now   = datetime.now(timezone.utc)
     month = now.month
 
-    weather_snapshot = {
+    return {
         "month":             month,
         "avg_temp":          round(np.mean(temps),     2),
         "max_temp":          round(np.max(temps),      2),
@@ -179,6 +178,36 @@ def fetch_live_weather_and_predict() -> dict:
         "max_radiation":     round(np.max(radiation),  2),
     }
 
-    result = predict_from_weather(**weather_snapshot)
-    result["weather_used"] = weather_snapshot
-    return result
+
+def fetch_live_weather_and_predict() -> dict:
+    """
+    1. Return a cached prediction if it's still fresh (< CACHE_TTL_MINUTES old).
+    2. Otherwise fetch today's forecast from Open-Meteo, predict, and cache it.
+    3. If Open-Meteo fails (e.g. rate limited) but we have ANY cached result
+       (even a stale one), serve that instead of raising an error.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Serve fresh cache
+    if _cache["result"] is not None and _cache["fetched_at"] is not None:
+        age = now - _cache["fetched_at"]
+        if age < timedelta(minutes=CACHE_TTL_MINUTES):
+            return _cache["result"]
+
+    # Cache is stale or empty — try a fresh fetch
+    try:
+        weather_snapshot = _fetch_weather_snapshot()
+        result = predict_from_weather(**weather_snapshot)
+        result["weather_used"] = weather_snapshot
+
+        _cache["result"] = result
+        _cache["fetched_at"] = now
+        return result
+
+    except Exception as e:
+        # Fetch failed — fall back to stale cache if we have ANY previous result
+        if _cache["result"] is not None:
+            print(f"⚠️  Open-Meteo fetch failed ({e}), serving stale cached result")
+            return _cache["result"]
+        # No cache at all to fall back on — surface the real error
+        raise RuntimeError(f"Could not fetch weather from Open-Meteo: {e}")
