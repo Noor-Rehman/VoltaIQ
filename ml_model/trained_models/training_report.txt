@@ -1,0 +1,41 @@
+VoltaIQ Outage Regressor — Training Report
+Generated : 2026-05-10 16:40:30
+============================================================
+
+Model     : GradientBoostingRegressor
+Target    : avg daily outage hours (from NEPRA historical data)
+Features  : ['avg_temp', 'max_temp', 'min_temp', 'avg_humidity', 'avg_apparent_temp', 'total_precip', 'avg_wind', 'avg_radiation', 'max_radiation', 'month', 'is_summer', 'temp_x_radiation']
+Training rows : 28 months (2020-2025)
+
+Cross-validation (5-fold):
+  MAE : 0.483 ± 0.146 hrs
+  R²  : 0.921 ± 0.039
+
+Full-training metrics:
+  MAE  : 0.008 hrs
+  RMSE : 0.011 hrs
+  R²   : 1.000
+
+Tier accuracy : 100.0%
+
+Feature importances:
+avg_apparent_temp    0.271696
+is_summer            0.255332
+temp_x_radiation     0.154223
+avg_temp             0.135307
+max_temp             0.073414
+max_radiation        0.038825
+min_temp             0.030647
+avg_radiation        0.028897
+month                0.004620
+avg_wind             0.004314
+total_precip         0.002435
+avg_humidity         0.000290
+
+Tier thresholds:
+  ≤ 3.0 hrs → 2HR
+  ≤ 5.0 hrs → 4HR
+  ≤ 7.0 hrs → 6HR
+  ≤ 9.0 hrs → 8HR
+  ≤ 11.0 hrs → 10HR
+  ≤ inf hrs → 12HR

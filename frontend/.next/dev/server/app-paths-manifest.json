@@ -1,0 +1,5 @@
+{
+  "/api/predict/today/route": "app/api/predict/today/route.js",
+  "/api/schedule/active-now/route": "app/api/schedule/active-now/route.js",
+  "/page": "app/page.js"
+}
